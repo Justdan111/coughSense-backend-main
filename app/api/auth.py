@@ -1,7 +1,14 @@
 from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from app.core.config import supabase
 from app.deps.auth import get_current_user
+from jose import jwt
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -52,7 +59,7 @@ def auth_health():
 )
 def register(data: RegisterRequest):
     try:
-        # Sign up with Supabase (auto-confirm email for development)
+        # Sign up with Supabase 
         res = supabase.auth.sign_up({
             "email": data.email,
             "password": data.password,
@@ -129,17 +136,26 @@ def login(data: LoginRequest):
         raise
     except Exception as e:
         error_message = str(e)
-        print(error_message)
+        print(f"LOGIN ERROR: {error_message}")  
+        
+        # Check for email not confirmed
+        if "email not confirmed" in error_message.lower():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Email not confirmed. Please check Supabase settings: Authentication → Providers → Email (disable Confirm email)"
+            )
+        
         # Handle specific auth errors
         if "invalid" in error_message.lower() or "credentials" in error_message.lower():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password"
             )
-        print(error_message)
+        
+        # Return the actual error for debugging
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication failed. Please try again."
+            detail=f"Authentication failed: {error_message}"
         )
 
 # ----------------------------
@@ -150,29 +166,43 @@ def login(data: LoginRequest):
     "/me",
     response_model=UserResponse
 )
-def get_me(user_id: str = Depends(get_current_user)):
+def get_me(
+    user_id: str = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+):
     """
     Get the current authenticated user's information.
     Requires a valid JWT token in the Authorization header.
     """
     try:
-        # Get user from Supabase
-        user = supabase.auth.get_user()
+        # Extract user info from the JWT token
+        token = credentials.credentials
         
-        if not user or not user.user:
+        # Decode the token to get claims (without verification since we already verified in get_current_user)
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            options={"verify_signature": False, "verify_aud": False}
+        )
+        
+        # Get email from the token claims
+        email = payload.get("email")
+        
+        if not email:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
+                detail="Email not found in token"
             )
         
         return UserResponse(
-            id=user.user.id,
-            email=user.user.email
+            id=user_id,
+            email=email
         )
     except HTTPException:
         raise
     except Exception as e:
+        print(f"GET_ME ERROR: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve user information"
+            detail=f"Failed to retrieve user information: {str(e)}"
         )

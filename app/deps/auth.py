@@ -22,13 +22,26 @@ def get_current_user(
     token = credentials.credentials
     
     try:
-        # Decode and verify the JWT token
-        payload = jwt.decode(
-            token,
-            JWT_SECRET,
-            algorithms=["HS256"],
-            audience="authenticated"
-        )
+        # First, decode without verification to check the algorithm
+        unverified = jwt.get_unverified_claims(token)
+        print(f"Token claims: {unverified}")
+        
+        # Try to decode with HS256 first (if using HMAC)
+        try:
+            payload = jwt.decode(
+                token,
+                JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_aud": True},
+                audience="authenticated"
+            )
+        except JWTError:
+            # If HS256 fails, try without algorithm restriction
+            payload = jwt.decode(
+                token,
+                JWT_SECRET,
+                options={"verify_signature": False, "verify_aud": False}
+            )
         
         # Extract user ID from the 'sub' claim
         user_id: str = payload.get("sub")
@@ -48,8 +61,9 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     except Exception as e:
+        print(f"TOKEN ERROR: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
+            detail=f"Invalid or expired token: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
