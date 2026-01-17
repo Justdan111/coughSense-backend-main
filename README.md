@@ -39,7 +39,8 @@ SUPABASE_JWT_SECRET=your-jwt-secret
 ### 3. Run the Development Server
 
 ```bash
-uv run fastapi dev app/main.py
+uv run uvicorn app.main:app --reload
+
 ```
 
 The API will be available at `http://127.0.0.1:8000`
