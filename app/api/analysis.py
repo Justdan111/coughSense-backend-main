@@ -1,7 +1,16 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+import os
+import uuid
+import shutil
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header, Body
+from pydantic import BaseModel
+
 from app.deps.auth import get_current_user
-from app.ml.inference import predict_from_audio
-from app.utils.audio import save_temp_audio
+from app.ml.inference import predict_from_audio, calculate_risk
+from app.ml.validator import validate_audio
+from app.core.supabase import supabase
 
 router = APIRouter()
 
@@ -15,66 +24,202 @@ ALLOWED_AUDIO_TYPES = {
     "audio/x-m4a",
 }
 
-def risk_message(severity: str):
-    if severity == "High":
-        return {
-            "risk_level": "high",
-            "summary": "Your cough pattern shows a high respiratory risk.",
-            "recommendation": "Seek medical attention as soon as possible.",
-            "actions": [
-                "Visit a healthcare facility",
-                "Avoid close contact with others",
-                "Monitor breathing difficulty or chest pain"
-            ]
-        }
+DISCLAIMER = (
+    "This result is for triage purposes only and does not constitute a medical "
+    "diagnosis. Always consult a qualified healthcare professional for any "
+    "health concerns."
+)
 
-    if severity == "Moderate":
+
+# ─────────────────────────────────────────────
+# Response helpers
+# ─────────────────────────────────────────────
+
+def triage_guidance(result: str) -> dict:
+    if result == "risky":
         return {
-            "risk_level": "medium",
-            "summary": "Your cough shows moderate respiratory risk.",
-            "recommendation": "Consider consulting a healthcare professional.",
+            "summary": "Your cough pattern and symptoms suggest a higher respiratory risk.",
+            "recommendation": "Please seek medical attention soon.",
             "actions": [
-                "Monitor symptoms",
-                "Rest and stay hydrated",
-                "Seek care if symptoms worsen"
-            ]
+                "Visit a clinic or hospital as soon as possible",
+                "Avoid close contact with others until assessed",
+                "Monitor for worsening chest pain or difficulty breathing",
+                "Do not ignore coughing up blood — seek urgent care immediately",
+            ],
         }
 
     return {
-        "risk_level": "low",
-        "summary": "Your cough shows low respiratory risk.",
-        "recommendation": "No urgent medical action required.",
+        "summary": "Your cough pattern and symptoms suggest a lower respiratory risk.",
+        "recommendation": "No urgent medical action required, but stay alert.",
         "actions": [
-            "Maintain good hydration",
-            "Monitor your health",
-            "Practice good hygiene"
-        ]
+            "Rest and stay well hydrated",
+            "Monitor your symptoms over the next 48 hours",
+            "Seek medical advice if symptoms persist beyond one week",
+            "Practice good hygiene to avoid spreading illness",
+        ],
     }
+
+
+# ─────────────────────────────────────────────
+# Supabase storage helper
+# ─────────────────────────────────────────────
+
+def save_to_supabase(
+    user_id: str,
+    temp_path: str,
+    original_filename: str,
+    cough_confidence: float,
+    symptoms: dict,
+    result: str,
+    score: int,
+):
+    """
+    Upload audio to Supabase Storage and insert metadata row.
+    Only called when user has consented in settings.
+    """
+    unique_name = f"{uuid.uuid4()}_{Path(original_filename).name}"
+
+    try:
+        with open(temp_path, "rb") as f:
+            supabase.storage.from_("cough-data").upload(
+                unique_name,
+                f,
+                {"content-type": "audio/wav"},
+            )
+    except Exception as e:
+        # Storage failure should not break the response
+        print(f"[Supabase Storage] Upload failed: {e}")
+        return
+
+    try:
+        supabase.table("cough_samples").insert({
+            "user_id": user_id,
+            "filename": unique_name,
+            "cough_confidence": round(cough_confidence * 100, 2),
+            "fever": symptoms.get("fever", False),
+            "blood": symptoms.get("blood", False),
+            "chest_pain": symptoms.get("chest_pain", False),
+            "difficulty_breathing": symptoms.get("difficulty_breathing", False),
+            "result": result,
+            "score": score,
+            "consent": True,
+        }).execute()
+    except Exception as e:
+        print(f"[Supabase DB] Insert failed: {e}")
+
+
+# ─────────────────────────────────────────────
+# Request model for /assess
+# ─────────────────────────────────────────────
+
+class AssessRequest(BaseModel):
+    cough_confidence: float          # raw value from /analyze (0.0–1.0)
+    fever: bool = False
+    blood: bool = False
+    chest_pain: bool = False
+    difficulty_breathing: bool = False
+    save_for_training: bool = False  # mirrors user's consent setting
+
+
+# ─────────────────────────────────────────────
+# STEP 1 — Audio analysis
+# ─────────────────────────────────────────────
 
 @router.post("/analysis/analyze")
 async def analyze_cough(
     audio: UploadFile = File(...),
-    user_id: str = Depends(get_current_user)
+    user_id: str = Depends(get_current_user),
 ):
-    # Validate file type
+    """
+    Accepts a cough audio file.
+    Returns cough_confidence score (0.0–1.0).
+    Frontend uses this to show the symptom form.
+    """
     if audio.content_type not in ALLOWED_AUDIO_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file type. Allowed types: {', '.join(sorted(ALLOWED_AUDIO_TYPES))}"
+            detail=(
+                f"Invalid file type. "
+                f"Allowed: {', '.join(sorted(ALLOWED_AUDIO_TYPES))}"
+            ),
         )
-    
-    path = save_temp_audio(audio)
-    severity, confidence = predict_from_audio(path)
 
-    guidance = risk_message(severity)
+    # Save to temp file
+    suffix = Path(audio.filename or "audio").suffix or ".wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(audio.file, tmp)
+        temp_path = tmp.name
+
+    try:
+        # Validate audio quality
+        is_valid, error_msg = validate_audio(temp_path)
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid audio sample. {error_msg}. "
+                    "Please record 3–5 distinct coughs in a quiet environment."
+                ),
+            )
+
+        cough_confidence = predict_from_audio(temp_path)
+
+        # Reject very low confidence — likely not a cough at all
+        if cough_confidence < 0.25:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No cough detected in this recording. "
+                    "Please record clearer cough sounds."
+                ),
+            )
+
+    finally:
+        os.unlink(temp_path)
 
     return {
-         "user_id": user_id,
-        "severity": severity,
-        "confidence": confidence,
+        "user_id": user_id,
+        "cough_confidence": cough_confidence,
+        "cough_confidence_pct": round(cough_confidence * 100, 2),
+        "disclaimer": DISCLAIMER,
+    }
+
+
+# ─────────────────────────────────────────────
+# STEP 2 — Symptom assessment + risk result
+# ─────────────────────────────────────────────
+
+@router.post("/analysis/assess")
+async def assess_risk(
+    data: AssessRequest = Body(..., embed=False),
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Combines cough confidence with symptom answers.
+    Returns triage result: risky or less_risky.
+    Optionally saves audio + metadata to Supabase if user consented.
+    """
+    symptoms = {
+        "fever": data.fever,
+        "blood": data.blood,
+        "chest_pain": data.chest_pain,
+        "difficulty_breathing": data.difficulty_breathing,
+    }
+
+    risk = calculate_risk(
+        cough_confidence=data.cough_confidence,
+        symptoms=symptoms,
+    )
+
+    result = risk["result"]
+    score = risk["score"]
+    guidance = triage_guidance(result)
+
+    return {
+        "user_id": user_id,
+        "result": result,
+        "cough_confidence_pct": risk["cough_confidence_pct"] if "cough_confidence_pct" in risk else round(data.cough_confidence * 100, 2),
+        "score": score,
         **guidance,
-        "disclaimer": (
-            "This system is for triage purposes only and does not provide "
-            "a medical diagnosis. Always consult a qualified healthcare professional."
-        )
+        "disclaimer": DISCLAIMER,
     }
