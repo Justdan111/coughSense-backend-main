@@ -232,14 +232,20 @@ def get_account(
         )
         email = payload.get("email")
 
-        # Fetch name from profiles table
+        # Fetch name from profiles table. Use a non-failing query (avoid `.single()`)
         result = supabase.table("profiles") \
             .select("name") \
             .eq("user_id", user_id) \
-            .single() \
             .execute()
 
-        name = result.data.get("name") if result.data else None
+        # `result.data` may be a list (multiple rows) or dict (single row)
+        row = None
+        if isinstance(result.data, list):
+            row = result.data[0] if len(result.data) > 0 else None
+        elif isinstance(result.data, dict):
+            row = result.data
+
+        name = row.get("name") if row else None
 
         return AccountResponse(id=user_id, email=email, name=name)
 
