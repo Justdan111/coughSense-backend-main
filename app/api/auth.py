@@ -36,6 +36,11 @@ class UpdateAccountRequest(BaseModel):
         description="User's display name"
     )
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(
+        description="Refresh token from login response"
+    )
+
 
 # ----------------------------
 # Response Schemas
@@ -54,6 +59,11 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+class RefreshTokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str | None = None
+    token_type: str = "bearer"
 
 
 # ----------------------------
@@ -166,6 +176,45 @@ def login(data: LoginRequest):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Authentication failed: {error_message}"
+        )
+
+
+# ----------------------------
+# Refresh Token
+# ----------------------------
+
+@router.post(
+    "/refresh",
+    response_model=RefreshTokenResponse
+)
+def refresh_token(data: RefreshTokenRequest):
+    """
+    Refresh an expired or expiring access token.
+    Pass the refresh_token from the login response.
+    """
+    try:
+        # Use Supabase session method to refresh
+        res = supabase.auth.refresh_session(data.refresh_token)
+
+        if not res.session or not res.session.access_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Failed to refresh token. Please login again."
+            )
+
+        return RefreshTokenResponse(
+            access_token=res.session.access_token,
+            refresh_token=res.session.refresh_token,
+            token_type="bearer"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"REFRESH_TOKEN ERROR: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token. Please login again."
         )
 
 
