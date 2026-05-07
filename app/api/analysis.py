@@ -4,7 +4,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header, Body
 from pydantic import BaseModel
 
 from app.deps.auth import get_current_user
@@ -191,8 +191,7 @@ async def analyze_cough(
 
 @router.post("/analysis/assess")
 async def assess_risk(
-    data: AssessRequest,
-    audio: UploadFile = File(None),   # optional — only needed if saving
+    data: AssessRequest = Body(..., embed=False),
     user_id: str = Depends(get_current_user),
 ):
     """
@@ -215,25 +214,6 @@ async def assess_risk(
     result = risk["result"]
     score = risk["score"]
     guidance = triage_guidance(result)
-
-    # Save to Supabase if user consented and audio file provided
-    if data.save_for_training and audio is not None:
-        suffix = Path(audio.filename or "audio").suffix or ".wav"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            shutil.copyfileobj(audio.file, tmp)
-            temp_path = tmp.name
-        try:
-            save_to_supabase(
-                user_id=user_id,
-                temp_path=temp_path,
-                original_filename=audio.filename or "recording.wav",
-                cough_confidence=data.cough_confidence,
-                symptoms=symptoms,
-                result=result,
-                score=score,
-            )
-        finally:
-            os.unlink(temp_path)
 
     return {
         "user_id": user_id,
