@@ -12,6 +12,7 @@ JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
+
 # ----------------------------
 # Request Schemas
 # ----------------------------
@@ -28,6 +29,14 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
+class UpdateAccountRequest(BaseModel):
+    name: str = Field(
+        min_length=1,
+        max_length=100,
+        description="User's display name"
+    )
+
+
 # ----------------------------
 # Response Schemas
 # ----------------------------
@@ -36,10 +45,16 @@ class UserResponse(BaseModel):
     id: str
     email: EmailStr
 
+class AccountResponse(BaseModel):
+    id: str
+    email: EmailStr
+    name: str | None = None
+
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
 
 # ----------------------------
 # Health Check
@@ -48,6 +63,7 @@ class AuthResponse(BaseModel):
 @router.get("/health")
 def auth_health():
     return {"status": "auth ok"}
+
 
 # ----------------------------
 # Register
@@ -59,7 +75,6 @@ def auth_health():
 )
 def register(data: RegisterRequest):
     try:
-        # Sign up with Supabase 
         res = supabase.auth.sign_up({
             "email": data.email,
             "password": data.password,
@@ -90,7 +105,6 @@ def register(data: RegisterRequest):
         raise
     except Exception as e:
         error_message = str(e)
-        # Handle common Supabase auth errors
         if "already registered" in error_message.lower():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -101,6 +115,7 @@ def register(data: RegisterRequest):
             detail=f"Registration failed: {error_message}"
         )
 
+
 # ----------------------------
 # Login
 # ----------------------------
@@ -110,9 +125,7 @@ def register(data: RegisterRequest):
     response_model=AuthResponse
 )
 def login(data: LoginRequest):
-
     try:
-        # Sign in with Supabase
         res = supabase.auth.sign_in_with_password({
             "email": data.email,
             "password": data.password
@@ -136,27 +149,25 @@ def login(data: LoginRequest):
         raise
     except Exception as e:
         error_message = str(e)
-        print(f"LOGIN ERROR: {error_message}")  
-        
-        # Check for email not confirmed
+        print(f"LOGIN ERROR: {error_message}")
+
         if "email not confirmed" in error_message.lower():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Email not confirmed. Please check Supabase settings: Authentication → Providers → Email (disable Confirm email)"
             )
-        
-        # Handle specific auth errors
+
         if "invalid" in error_message.lower() or "credentials" in error_message.lower():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password"
             )
-        
-        # Return the actual error for debugging
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Authentication failed: {error_message}"
         )
+
 
 # ----------------------------
 # Get Current User
@@ -170,34 +181,23 @@ def get_me(
     user_id: str = Depends(get_current_user),
     credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
 ):
-    """
-    Get the current authenticated user's information.
-    Requires a valid JWT token in the Authorization header.
-    """
     try:
-        # Extract user info from the JWT token
         token = credentials.credentials
-        
-        # Decode the token to get claims (without verification since we already verified in get_current_user)
         payload = jwt.decode(
             token,
             JWT_SECRET,
             options={"verify_signature": False, "verify_aud": False}
         )
-        
-        # Get email from the token claims
         email = payload.get("email")
-        
+
         if not email:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Email not found in token"
             )
-        
-        return UserResponse(
-            id=user_id,
-            email=email
-        )
+
+        return UserResponse(id=user_id, email=email)
+
     except HTTPException:
         raise
     except Exception as e:
@@ -205,4 +205,93 @@ def get_me(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve user information: {str(e)}"
+        )
+
+
+# ----------------------------
+# Get Account (name + email)
+# ----------------------------
+
+@router.get(
+    "/account",
+    response_model=AccountResponse
+)
+def get_account(
+    user_id: str = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+):
+    """
+    Returns the current user's email and saved display name.
+    """
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            options={"verify_signature": False, "verify_aud": False}
+        )
+        email = payload.get("email")
+
+        # Fetch name from profiles table
+        result = supabase.table("profiles") \
+            .select("name") \
+            .eq("user_id", user_id) \
+            .single() \
+            .execute()
+
+        name = result.data.get("name") if result.data else None
+
+        return AccountResponse(id=user_id, email=email, name=name)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"GET_ACCOUNT ERROR: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve account information: {str(e)}"
+        )
+
+
+# ----------------------------
+# Update Account (save name)
+# ----------------------------
+
+@router.patch(
+    "/account",
+    response_model=AccountResponse
+)
+def update_account(
+    data: UpdateAccountRequest,
+    user_id: str = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+):
+    """
+    Save or update the user's display name.
+    Uses upsert so it works whether the profile row exists or not.
+    """
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            options={"verify_signature": False, "verify_aud": False}
+        )
+        email = payload.get("email")
+
+        # Upsert into profiles table
+        supabase.table("profiles").upsert({
+            "user_id": user_id,
+            "name": data.name.strip()
+        }).execute()
+
+        return AccountResponse(id=user_id, email=email, name=data.name.strip())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"UPDATE_ACCOUNT ERROR: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update account: {str(e)}"
         )
