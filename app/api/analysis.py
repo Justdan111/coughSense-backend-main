@@ -1,6 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from app.deps.auth import get_current_user
 from app.ml.inference import predict_from_audio
+from app.ml.validator import validate_audio
 from app.utils.audio import save_temp_audio
 
 router = APIRouter()
@@ -64,7 +65,23 @@ async def analyze_cough(
         )
     
     path = save_temp_audio(audio)
-    severity, confidence = predict_from_audio(path)
+    
+    # Validate audio quality before prediction
+    is_valid, error_msg = validate_audio(path)
+    if not is_valid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid audio sample. {error_msg}. Please record 3–5 distinct coughs in a quiet environment."
+        )
+    
+    severity, confidence, probs = predict_from_audio(path)
+    
+    # Reject predictions with low confidence
+    if confidence < 55:
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to confidently analyze sample. Please record clearer cough sounds."
+        )
 
     guidance = risk_message(severity)
 
