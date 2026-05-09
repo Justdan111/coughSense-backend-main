@@ -1,0 +1,434 @@
+{
+  "info": {
+    "_postman_id": "f0c0a7a0-cs01-4a0a-9c3a-coughsense0001",
+    "name": "CoughSense API",
+    "description": "Comprehensive Postman collection for the CoughSense FastAPI backend.\n\n**Setup**\n1. Import this file into Postman.\n2. Import `CoughSense.postman_environment.json` and select it as the active environment.\n3. Set `base_url`, `email`, `password` in the environment.\n4. Run **Auth → Register** once (or use an existing account), then **Auth → Login** to populate `{{access_token}}` and `{{refresh_token}}` automatically.\n\n**Auto-auth**\nThe collection-level pre-request script runs **Login** automatically when `{{access_token}}` is empty, so you can run any request directly without manually chaining. Disable it from `Settings` if you prefer manual control.\n\n**Run all**\n- Postman: Runner → Run CoughSense API → all green.\n- CLI: `newman run CoughSense.postman_collection.json -e CoughSense.postman_environment.json`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{access_token}}", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auto-login when access_token is empty.",
+          "// Skips on the Login/Register/Health requests themselves to avoid recursion.",
+          "const skip = ['Register', 'Login', 'Health', 'Refresh Token'];",
+          "if (skip.indexOf(pm.info.requestName) !== -1) { return; }",
+          "if (pm.environment.get('access_token')) { return; }",
+          "const email = pm.environment.get('email');",
+          "const password = pm.environment.get('password');",
+          "if (!email || !password) {",
+          "    console.warn('Set email and password in environment to enable auto-login.');",
+          "    return;",
+          "}",
+          "pm.sendRequest({",
+          "    url: pm.environment.get('base_url') + '/api/auth/login',",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({ email: email, password: password }) }",
+          "}, function (err, res) {",
+          "    if (err || res.code !== 200) {",
+          "        console.error('Auto-login failed:', err || res.text());",
+          "        return;",
+          "    }",
+          "    const body = res.json();",
+          "    pm.environment.set('access_token', body.access_token);",
+          "    if (body.user && body.user.id) pm.environment.set('user_id', body.user.id);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/auth/health", "host": ["{{base_url}}"], "path": ["api", "auth", "health"] },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('returns status:auth ok', () => pm.expect(pm.response.json()).to.eql({ status: 'auth ok' }));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/auth/register", "host": ["{{base_url}}"], "path": ["api", "auth", "register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('has user.id and user.email', () => {",
+                  "    pm.expect(body).to.have.nested.property('user.id');",
+                  "    pm.expect(body).to.have.nested.property('user.email');",
+                  "});",
+                  "if (body.user && body.user.access_token) {",
+                  "    pm.environment.set('access_token', body.user.access_token);",
+                  "    if (body.user.refresh_token) pm.environment.set('refresh_token', body.user.refresh_token);",
+                  "    pm.environment.set('user_id', body.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/auth/login", "host": ["{{base_url}}"], "path": ["api", "auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('access_token present', () => pm.expect(body.access_token).to.be.a('string').and.not.empty);",
+                  "pm.test('token_type is bearer', () => pm.expect(body.token_type).to.eql('bearer'));",
+                  "pm.environment.set('access_token', body.access_token);",
+                  "if (body.refresh_token) pm.environment.set('refresh_token', body.refresh_token);",
+                  "if (body.user && body.user.id) pm.environment.set('user_id', body.user.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/auth/refresh", "host": ["{{base_url}}"], "path": ["api", "auth", "refresh"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+            },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('returns new access_token', () => pm.expect(body.access_token).to.be.a('string').and.not.empty);",
+                  "pm.environment.set('access_token', body.access_token);",
+                  "if (body.refresh_token) pm.environment.set('refresh_token', body.refresh_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Me",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/auth/me", "host": ["{{base_url}}"], "path": ["api", "auth", "me"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('returns id and email', () => {",
+                  "    pm.expect(body).to.have.property('id');",
+                  "    pm.expect(body).to.have.property('email');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Account",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/auth/account", "host": ["{{base_url}}"], "path": ["api", "auth", "account"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('returns id, email, name', () => {",
+                  "    pm.expect(body).to.have.property('id');",
+                  "    pm.expect(body).to.have.property('email');",
+                  "    pm.expect(body).to.have.property('name');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Account",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/auth/account", "host": ["{{base_url}}"], "path": ["api", "auth", "account"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dan Emmanuel\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('name reflects request (trimmed)', () => pm.expect(body.name).to.eql('Dan Emmanuel'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Analysis",
+      "item": [
+        {
+          "name": "Analyze Cough (audio upload)",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/analysis/analyze", "host": ["{{base_url}}"], "path": ["api", "analysis", "analyze"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "audio",
+                  "type": "file",
+                  "src": [],
+                  "description": "WAV/MP3/OGG/FLAC/M4A — at least 2 seconds of audible cough"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('cough_confidence between 0 and 1', () => {",
+                  "    pm.expect(body.cough_confidence).to.be.a('number');",
+                  "    pm.expect(body.cough_confidence).to.be.within(0, 1);",
+                  "});",
+                  "pm.test('contains user_id and disclaimer', () => {",
+                  "    pm.expect(body).to.have.property('user_id');",
+                  "    pm.expect(body).to.have.property('disclaimer');",
+                  "});",
+                  "pm.environment.set('last_cough_confidence', body.cough_confidence);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Assess Risk (low risk example)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/analysis/assess", "host": ["{{base_url}}"], "path": ["api", "analysis", "assess"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cough_confidence\": {{last_cough_confidence}},\n  \"fever\": false,\n  \"blood\": false,\n  \"chest_pain\": false,\n  \"difficulty_breathing\": false,\n  \"save_for_training\": false\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('result is risky or less_risky', () => pm.expect(['risky','less_risky']).to.include(body.result));",
+                  "pm.test('score is non-negative integer', () => {",
+                  "    pm.expect(body.score).to.be.a('number');",
+                  "    pm.expect(body.score).to.be.at.least(0);",
+                  "});",
+                  "pm.test('actions is non-empty array', () => {",
+                  "    pm.expect(body.actions).to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Assess Risk (high risk: blood)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/analysis/assess", "host": ["{{base_url}}"], "path": ["api", "analysis", "assess"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cough_confidence\": 0.5,\n  \"fever\": false,\n  \"blood\": true,\n  \"chest_pain\": false,\n  \"difficulty_breathing\": false,\n  \"save_for_training\": false\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('result is risky', () => pm.expect(body.result).to.eql('risky'));",
+                  "pm.test('score >= 4', () => pm.expect(body.score).to.be.at.least(4));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Negative cases",
+      "item": [
+        {
+          "name": "Get Me — no token (401/403)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/auth/me", "host": ["{{base_url}}"], "path": ["api", "auth", "me"] },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('rejects unauthenticated request', () => pm.expect([401, 403]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login — wrong password (401)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/auth/login", "host": ["{{base_url}}"], "path": ["api", "auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"definitely-wrong-password\"\n}"
+            },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('rejects bad credentials', () => pm.expect([400, 401]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register — invalid email (422)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/auth/register", "host": ["{{base_url}}"], "path": ["api", "auth", "register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"not-an-email\",\n  \"password\": \"Test1234!Strong\"\n}"
+            },
+            "auth": { "type": "noauth" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('rejects invalid email', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Account — empty name (422)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/api/auth/account", "host": ["{{base_url}}"], "path": ["api", "auth", "account"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"\"\n}" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('rejects empty name', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
