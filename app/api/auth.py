@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
+from supabase import Client
 from app.core.config import supabase
 from app.deps.auth import get_current_user
+from app.deps.supabase_client import get_user_supabase
 from jose import jwt
 import os
 from dotenv import load_dotenv
@@ -267,7 +269,8 @@ def get_me(
 )
 def get_account(
     user_id: str = Depends(get_current_user),
-    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer()),
+    db: Client = Depends(get_user_supabase),
 ):
     """
     Returns the current user's email and saved display name.
@@ -282,7 +285,7 @@ def get_account(
         email = payload.get("email")
 
         # Fetch name from profiles table. Use a non-failing query (avoid `.single()`)
-        result = supabase.table("profiles") \
+        result = db.table("profiles") \
             .select("name") \
             .eq("user_id", user_id) \
             .execute()
@@ -319,7 +322,8 @@ def get_account(
 def update_account(
     data: UpdateAccountRequest,
     user_id: str = Depends(get_current_user),
-    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer()),
+    db: Client = Depends(get_user_supabase),
 ):
     """
     Save or update the user's display name.
@@ -334,8 +338,8 @@ def update_account(
         )
         email = payload.get("email")
 
-        # Upsert into profiles table
-        supabase.table("profiles").upsert({
+        # Upsert into profiles table (RLS policy requires auth.uid() = user_id)
+        db.table("profiles").upsert({
             "user_id": user_id,
             "name": data.name.strip()
         }).execute()

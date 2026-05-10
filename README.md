@@ -133,3 +133,34 @@ app/
 - Uses `uv` for dependency management
 - FastAPI for the web framework
 - Supabase for authentication and database
+
+## Testing
+
+The project ships with a comprehensive pytest suite (unit + integration)
+and a runnable Postman collection. Full instructions in
+[docs/TESTING.md](./docs/TESTING.md).
+
+```bash
+# Install dev deps
+uv sync --group dev
+
+# Configure a test Supabase project
+cp .env.test.example .env.test
+# (edit .env.test with your test project credentials)
+
+# Run only fast unit tests (no network)
+uv run pytest -m "not integration"
+
+# Run the full suite with coverage
+uv run pytest --cov=app --cov-report=term-missing
+
+# Run the Postman collection from CLI
+newman run tests/postman/CoughSense.postman_collection.json \
+       -e tests/postman/CoughSense.postman_environment.json
+```
+
+## Documentation
+
+- [docs/API.md](./docs/API.md) — endpoint catalog, request/response shapes, scoring rules
+- [docs/TESTING.md](./docs/TESTING.md) — pytest setup, fixtures, troubleshooting
+- [docs/POSTMAN.md](./docs/POSTMAN.md) — Postman + Newman usage
