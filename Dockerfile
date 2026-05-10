@@ -35,10 +35,13 @@ RUN mkdir -p /opt/tfhub && \
 # ---------- Stage 2: runtime ----------
 FROM python:3.11-slim-bookworm AS runtime
 
-# libsndfile1 -> soundfile/librosa, libgomp1 -> sklearn/numpy/TF OpenMP, curl -> HEALTHCHECK
+# libsndfile1 -> soundfile/librosa, libgomp1 -> sklearn/numpy/TF OpenMP,
+# ffmpeg -> librosa/audioread fallback for browser-recorded webm/opus and mp4/aac,
+# curl -> HEALTHCHECK
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libsndfile1 \
         libgomp1 \
+        ffmpeg \
         ca-certificates \
         curl \
     && rm -rf /var/lib/apt/lists/* \

@@ -22,6 +22,12 @@ ALLOWED_AUDIO_TYPES = {
     "audio/flac",
     "audio/x-wav",
     "audio/x-m4a",
+    # Browser MediaRecorder defaults: Chrome/Firefox/Edge emit webm/opus,
+    # Safari emits mp4/aac. Codec parameters (e.g. ";codecs=opus") are
+    # stripped before the membership check below.
+    "audio/webm",
+    "audio/mp4",
+    "audio/aac",
 }
 
 DISCLAIMER = (
@@ -135,7 +141,8 @@ async def analyze_cough(
     Returns cough_confidence score (0.0–1.0).
     Frontend uses this to show the symptom form.
     """
-    if audio.content_type not in ALLOWED_AUDIO_TYPES:
+    base_content_type = (audio.content_type or "").split(";", 1)[0].strip().lower()
+    if base_content_type not in ALLOWED_AUDIO_TYPES:
         raise HTTPException(
             status_code=400,
             detail=(
